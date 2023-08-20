@@ -82,17 +82,19 @@ returns -
 
 """
 
-def get_next_distance(reference_idx: int, query_idx: int,\
-                      distances: np.ndarray) -> Tuple[float, int, int]:
+
+def get_next_distance(
+    reference_idx: int, query_idx: int, distances: np.ndarray
+) -> Tuple[float, int, int]:
 
     distance = 0
-    
-    #Reached the end of the query
-    if (query_idx == distances.shape[1] - 1):
+
+    # Reached the end of the query
+    if query_idx == distances.shape[1] - 1:
         distance = -1
     else:
-        #at the end of the reference, align all the coming queries to this end
-        if (reference_idx == distances.shape[0] - 1):
+        # at the end of the reference, align all the coming queries to this end
+        if reference_idx == distances.shape[0] - 1:
             query_idx = query_idx + 1
             assert query_idx < distances.shape[1]
             distance = distances[reference_idx][query_idx]
@@ -101,32 +103,33 @@ def get_next_distance(reference_idx: int, query_idx: int,\
             temp_distance = []
             min_dist = inf
             min_idx = -1
-            
-            #match
-            temp_distance.append(distances[reference_idx+1][query_idx+1])
-            #insert
-            temp_distance.append(distances[reference_idx][query_idx+1])
-            #delete
-            temp_distance.append(distances[reference_idx+1][query_idx])
-            
+
+            # match
+            temp_distance.append(distances[reference_idx + 1][query_idx + 1])
+            # insert
+            temp_distance.append(distances[reference_idx][query_idx + 1])
+            # delete
+            temp_distance.append(distances[reference_idx + 1][query_idx])
+
             for k in range(0, len(temp_distance)):
-                if (temp_distance[k] < min_dist):
+                if temp_distance[k] < min_dist:
                     min_dist = temp_distance[k]
                     min_idx = k
 
-            if (min_idx == 0):
-                reference_idx,query_idx = reference_idx+1, query_idx+1
-            elif (min_idx == 1):
-                reference_idx,query_idx = reference_idx, query_idx+1
+            if min_idx == 0:
+                reference_idx, query_idx = reference_idx + 1, query_idx + 1
+            elif min_idx == 1:
+                reference_idx, query_idx = reference_idx, query_idx + 1
             else:
                 assert min_idx == 2
-                reference_idx,query_idx = reference_idx+1, query_idx
-                
-            distance = min_dist 
-            
+                reference_idx, query_idx = reference_idx + 1, query_idx
+
+            distance = min_dist
+
     return distance, reference_idx, query_idx
 
-'''
+
+"""
 calculate_min_distance
 
 parameters:
@@ -154,31 +157,35 @@ begining at the reference_idx.
 2. reference_end_idx : the end of alignment of the query 
 within the reference
 
-'''
+"""
 
-def calculate_min_distance(reference_idx: int,\
-                           distances: np.ndarray,\
-                               min_distance: float) -> Tuple[float, int]:
+
+def calculate_min_distance(
+    reference_idx: int, distances: np.ndarray, min_distance: float
+) -> Tuple[float, int]:
 
     total_distance = 0
     query_idx = 0
-        
+
     next_distance = distances[reference_idx][0]
-    
+
     reference_end_idx = reference_idx
-    
-    while (next_distance >= 0):
-        
+
+    while next_distance >= 0:
+
         total_distance = total_distance + next_distance
-        next_distance, reference_end_idx, query_idx =  get_next_distance(reference_end_idx, query_idx, distances)
-        
-        #no need to traverse any more, this is not the best match
-        if (total_distance > min_distance):
+        next_distance, reference_end_idx, query_idx = get_next_distance(
+            reference_end_idx, query_idx, distances
+        )
+
+        # no need to traverse any more, this is not the best match
+        if total_distance > min_distance:
             break
-    
+
     return total_distance, reference_end_idx
 
-'''
+
+"""
 least_distance_mfcc
 
 parameters:
@@ -201,75 +208,91 @@ returns:
 1. the start of the best match
 2. end of the best match
 3. the distance of the best match
-'''
+"""
 
-def least_distance_mfcc(mfcc_reference: np.ndarray,\
-                        mfcc_query: np.ndarray) -> Tuple[int, int, float]:
+
+def least_distance_mfcc(
+    mfcc_reference: np.ndarray, mfcc_query: np.ndarray
+) -> Tuple[int, int, float]:
 
     min_distance = inf
-    start_index, end_index = 0,0
+    start_index, end_index = 0, 0
 
     distances = cdist(mfcc_reference, mfcc_query, "euclidean")
 
     for i in range(0, distances.shape[0]):
         current_distance, end = calculate_min_distance(i, distances, min_distance)
-        if (current_distance < min_distance):
+        if current_distance < min_distance:
             min_distance = current_distance
             start_index = i
             end_index = end
 
     return start_index, end_index, min_distance
 
-file = r'C:\Users\Lenovo\Desktop\dataset\ds1.wav'
+
+file = r"C:\Users\Lenovo\Desktop\dataset\ds1.wav"
 y, sr = librosa.load(file)
 
-REFERENCE_DURATION = 5 #in secs
+REFERENCE_DURATION = 5  # in secs
 
 NUM_QUERIES_IN_REFERENCE = 4
 
-#number of samples in the reference duration
-reference_samples = REFERENCE_DURATION * sr 
+# number of samples in the reference duration
+reference_samples = REFERENCE_DURATION * sr
 
-#doing len(y) - reference_samples to leave out the last part, which maybe small enough to be lesser than n_fft
+# doing len(y) - reference_samples to leave out the last part, which maybe small enough to be lesser than n_fft
 for i in range(0, len(y) - reference_samples, reference_samples):
-    
+
     y_reference = y[i : i + reference_samples]
-    
+
     mfcc_reference = librosa.feature.mfcc(y=y_reference, sr=sr)
-    '''
+    """
     librosa returns an array with n_mfcc (number of mfcc's per frame)
     number of columns. having an array with the number of columns equal to the number
     of mfcc sets (number of frames) and number of rows equal to n_mfcc
     is more easy to visualise and more importantly cdist function which
     calculates the distance matrix requires that the number of rows to be
     the same for the two arrays. Hence taking a traspose.
-    '''
+    """
     mfcc_reference = mfcc_reference.T
-    
+
     num_mfccs_in_query = mfcc_reference.shape[0] / NUM_QUERIES_IN_REFERENCE
 
-    #for every reference, NUM_QUERIES_IN_REFERENCE queries are created.
+    # for every reference, NUM_QUERIES_IN_REFERENCE queries are created.
     for j in range(0, NUM_QUERIES_IN_REFERENCE):
-        
-        #typecasting as int since query_start will be used as array index
-        #and only an integer can be an array index
+
+        # typecasting as int since query_start will be used as array index
+        # and only an integer can be an array index
         query_start = int(j * num_mfccs_in_query)
         query_end = query_start + int(num_mfccs_in_query)
-            
-        mfcc_query = mfcc_reference[query_start : query_end]
-     
-        #find the best match for the query within the reference
-        start_index,end_index, min_distance = least_distance_mfcc(mfcc_reference, mfcc_query)
 
-        #expect the best match to be the query itself                
-        if (start_index != query_start \
-            or end_index != query_end - 1 \
-                or min_distance != 0):
-            
-            print("i %d j %d. exp start %d [got %d] end %d [got %d]. \
-                  Query length %d min distance %d" \
-                  %(i, j, query_start, start_index, \
-                    query_end - 1, end_index, \
-                        mfcc_query.shape[0], min_distance))
-            
+        mfcc_query = mfcc_reference[query_start:query_end]
+
+        # find the best match for the query within the reference
+        start_index, end_index, min_distance = least_distance_mfcc(
+            mfcc_reference, mfcc_query
+        )
+
+        # expect the best match to be the query itself
+        if (
+            start_index != query_start
+            or end_index != query_end - 1
+            or min_distance != 0
+        ):
+
+            print(
+                "i %d j %d. exp start %d [got %d] end %d [got %d]. \
+                  Query length %d min distance %d"
+                % (
+                    i,
+                    j,
+                    query_start,
+                    start_index,
+                    query_end - 1,
+                    end_index,
+                    mfcc_query.shape[0],
+                    min_distance,
+                )
+            )
+
 print("DONE :")
