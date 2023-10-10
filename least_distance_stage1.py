@@ -212,9 +212,9 @@ def least_distance_mfcc(
     return start_index, end_index
 
 
-file: str = r"C:\Users\Lenovo\Desktop\dataset\santhai.wav"
+file: str = r"data/ds1.wav"
 y, sr = librosa.load(file)
-
+    
 reference_samples: int = int(sr * REFERENCE_DURATION)
 query_samples: int = int(sr * QUERY_DURATION)
 query_offset_samples: int = int(sr * QUERY_OFFSET_DURATION)

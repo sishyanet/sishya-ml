@@ -45,7 +45,6 @@ from typing import List, Tuple
 import fnmatch
 import os
 from pathlib import Path
-from audiomentations import Compose, AddGaussianNoise, TimeStretch, PitchShift, Shift
 
 NUM_FEATURES: int = 36
 hop_samples: int = 2048
@@ -55,10 +54,10 @@ LIBROSA_SEMITONE_STEP: float = 0.3
 LIBROSA_TIME_STRETCH: float = 1.1
 MATCH_THRESHOLD: float = 0.5  # in secs
 PITCH_SHIFT: int = 1
-TIME_STRETCH: int = 0
+TIME_STRETCH: int = 1
 DO_MFCC_FEATURE: int = 1
 query_directory: str = (
-    r"C:\Users\Lenovo\Desktop\dataset\ds_4min\sishyaapp_recordings_wav"
+    r"data/sishyaapp_recordings_wav"
 )
 
 """
@@ -239,32 +238,6 @@ def least_distance_mfcc(
     return start_index, end_index
 
 """
-modify_query_audiomentations:
-
-Not used right now. Query modifications are done with inbuilt librosa
-functions. Librosa modifications are a constant. 
-Audiomentation modifications work on a range of random parameters and
-hence will not give the same modified output every run.
-
-"""
-
-def modify_query_audiomentations(y_query: np.ndarray, sr: int) -> np.ndarray:
-
-    augment = Compose(
-        [
-            # AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.015, p=0.5),
-            # TimeStretch(min_rate=0.8, max_rate=1.25, p=0.5),
-            PitchShift(min_semitones=-1, max_semitones=1, p=1)
-            # Shift(p=0.5),
-        ]
-    )
-
-    y_query = augment(samples=y_query, sample_rate=sr)
-
-    return y_query
-
-
-"""
 
 modify_query_librosa:
 
@@ -326,7 +299,7 @@ def do_feature_extraction(y_data: np.ndarray, sr: int) -> np.ndarray:
 
 #The directory holds segmented sishya app files. The files will be
 #concatenated to form the reference.
-query_file_count: int = len(fnmatch.filter(os.listdir(query_directory), "*.*"))
+query_file_count: int = len(fnmatch.filter(os.listdir(query_directory), "*.wav"))
 num_references: int = int(
     (query_file_count + NUM_QUERIES_IN_REFERENCE - 1) / NUM_QUERIES_IN_REFERENCE
 )
@@ -345,7 +318,7 @@ for i in range(0, num_references):
 
     for j in range(0, current_number_of_queries_in_reference):
 
-        f = r"%s\%d.wav" % (query_directory, query_file_number)
+        f = r"%s/vs-%d.wav" % (query_directory, query_file_number)
         query_file_number = query_file_number + 1
 
         y_query, sr = librosa.load(f)
@@ -381,14 +354,14 @@ for i in range(0, num_references):
             mismatches += 1
 
         print(
-            "i %d j %d. Expected start %f end %f. Returned start %f end sec %f"
+            "i %d j %d. Expected start %d end %d. Returned start %d end sec %d"
             % (
                 i,
                 j,
-                current_query_start / sr,
-                current_query_end / sr,
-                (start_index * hop_samples) / sr,
-                (end_index * hop_samples) / sr,
+                current_query_start,
+                current_query_end,
+                (start_index * hop_samples),
+                (end_index * hop_samples),
             )
         )
 

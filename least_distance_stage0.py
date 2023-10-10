@@ -230,69 +230,74 @@ def least_distance_mfcc(
     return start_index, end_index, min_distance
 
 
-file = r"C:\Users\Lenovo\Desktop\dataset\ds1.wav"
-y, sr = librosa.load(file)
+def main():
+    file = r"data/ds1.wav"
+    y, sr = librosa.load(file)
 
-REFERENCE_DURATION = 5  # in secs
+    REFERENCE_DURATION = 5  # in secs
 
-NUM_QUERIES_IN_REFERENCE = 4
+    NUM_QUERIES_IN_REFERENCE = 4
 
-# number of samples in the reference duration
-reference_samples = REFERENCE_DURATION * sr
+    # number of samples in the reference duration
+    reference_samples = REFERENCE_DURATION * sr
 
-# doing len(y) - reference_samples to leave out the last part, which maybe small enough to be lesser than n_fft
-for i in range(0, len(y) - reference_samples, reference_samples):
+    # doing len(y) - reference_samples to leave out the last part, which maybe small enough to be lesser than n_fft
+    for i in range(0, len(y) - reference_samples, reference_samples):
 
-    y_reference = y[i : i + reference_samples]
+        y_reference = y[i : i + reference_samples]
 
-    mfcc_reference = librosa.feature.mfcc(y=y_reference, sr=sr)
-    """
-    librosa returns an array with n_mfcc (number of mfcc's per frame)
-    number of columns. having an array with the number of columns equal to the number
-    of mfcc sets (number of frames) and number of rows equal to n_mfcc
-    is more easy to visualise and more importantly cdist function which
-    calculates the distance matrix requires that the number of rows to be
-    the same for the two arrays. Hence taking a traspose.
-    """
-    mfcc_reference = mfcc_reference.T
+        mfcc_reference = librosa.feature.mfcc(y=y_reference, sr=sr, center=False)
+        """
+        librosa returns an array with n_mfcc (number of mfcc's per frame)
+        number of columns. having an array with the number of columns equal to the number
+        of mfcc sets (number of frames) and number of rows equal to n_mfcc
+        is more easy to visualise and more importantly cdist function which
+        calculates the distance matrix requires that the number of rows to be
+        the same for the two arrays. Hence taking a traspose.
+        """
+        mfcc_reference = mfcc_reference.T
 
-    num_mfccs_in_query = mfcc_reference.shape[0] / NUM_QUERIES_IN_REFERENCE
+        num_mfccs_in_query = mfcc_reference.shape[0] / NUM_QUERIES_IN_REFERENCE
 
-    # for every reference, NUM_QUERIES_IN_REFERENCE queries are created.
-    for j in range(0, NUM_QUERIES_IN_REFERENCE):
+        # for every reference, NUM_QUERIES_IN_REFERENCE queries are created.
+        for j in range(0, NUM_QUERIES_IN_REFERENCE):
 
-        # typecasting as int since query_start will be used as array index
-        # and only an integer can be an array index
-        query_start = int(j * num_mfccs_in_query)
-        query_end = query_start + int(num_mfccs_in_query)
+            # typecasting as int since query_start will be used as array index
+            # and only an integer can be an array index
+            query_start = int(j * num_mfccs_in_query)
+            query_end = query_start + int(num_mfccs_in_query)
 
-        mfcc_query = mfcc_reference[query_start:query_end]
+            mfcc_query = mfcc_reference[query_start:query_end]
 
-        # find the best match for the query within the reference
-        start_index, end_index, min_distance = least_distance_mfcc(
-            mfcc_reference, mfcc_query
-        )
-
-        # expect the best match to be the query itself
-        if (
-            start_index != query_start
-            or end_index != query_end - 1
-            or min_distance != 0
-        ):
-
-            print(
-                "i %d j %d. exp start %d [got %d] end %d [got %d]. \
-                  Query length %d min distance %d"
-                % (
-                    i,
-                    j,
-                    query_start,
-                    start_index,
-                    query_end - 1,
-                    end_index,
-                    mfcc_query.shape[0],
-                    min_distance,
-                )
+            # find the best match for the query within the reference
+            start_index, end_index, min_distance = least_distance_mfcc(
+                mfcc_reference, mfcc_query
             )
 
-print("DONE :")
+            # expect the best match to be the query itself
+            if (
+                start_index != query_start
+                or end_index != query_end - 1
+                or min_distance != 0
+            ):
+
+                print(
+                    "i %d j %d. exp start %d [got %d] end %d [got %d]. \
+                      Query length %d min distance %d"
+                    % (
+                        i,
+                        j,
+                        query_start,
+                        start_index,
+                        query_end - 1,
+                        end_index,
+                        mfcc_query.shape[0],
+                        min_distance,
+                    )
+                )
+
+    print("DONE :")
+
+
+if __name__ == '__main__':
+    main()
