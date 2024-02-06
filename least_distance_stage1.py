@@ -14,8 +14,6 @@ duration is used as reference.
 In stage0 the comparision was done at the mfcc domain, meaning a small
 subset of mfcc's was queried against a superset of mfcc's
 
-
-
 """
 
 import librosa
@@ -212,7 +210,7 @@ def least_distance_mfcc(
     return start_index, end_index
 
 
-file: str = r"data/ds1.wav"
+file: str = r"C:\Users\Lenovo\Desktop\dataset\ds_4min\ds1_4.wav"
 y, sr = librosa.load(file)
     
 reference_samples: int = int(sr * REFERENCE_DURATION)
