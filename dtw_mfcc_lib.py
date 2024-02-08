@@ -164,6 +164,11 @@ def get_deviation_from_slope(D, wp):
  
     return total_deviation, total_deviation/wp.shape[0]
 
+def calc_slope_deviation_mfcc(mfcc_src, mfcc_dst):
+    distances = cdist(mfcc_src.T, mfcc_dst.T)
+    D, wp = librosa.sequence.dtw(C = distances)
+    return get_deviation_from_slope(D,wp)
+
 def get_start_end_labels(filename):
 
     start = []
@@ -199,5 +204,36 @@ def get_all_files_in_datatset():
         file_name.append(base_name[:-4])
     return file_name
 
+def get_audio_filename(filename):
+    return r"C:\Users\Lenovo\Desktop\dataset\ds_4min\%s_4.wav" % (filename)
+
+def get_label_filename(filename):
+    return r"C:\Users\Lenovo\Desktop\dataset\ds_4min\%s.txt" % (filename)
+
 def get_sishya_app_dataset_filename():
     return "ds13"
+
+def get_mfccs_for_audio(filename):
+    
+    mfcc_arr = []
+    
+    query_file_count = get_query_file_count()
+    
+    start_arr, end_arr = get_start_end_labels(get_label_filename(filename))
+    assert len(start_arr) == len(end_arr) == query_file_count
+    
+    y_audio = load_audio(get_audio_filename(filename))
+    
+    for i in range(0, len(start_arr)):
+        start = start_arr[i]
+        end = end_arr[i]
+        y_curr = y_audio[start:end]
+        mfcc_arr.append(get_mfcc(y_curr))
+    
+    return mfcc_arr
+
+def get_mfccs_for_app_audio():
+    
+    app_filename = get_sishya_app_dataset_filename()
+    
+    return get_mfccs_for_audio(app_filename)
