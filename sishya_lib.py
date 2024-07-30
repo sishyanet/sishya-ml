@@ -5,7 +5,7 @@ import librosa
 from enum import Enum
 import struct
 
-#from scipy.spatial.distance import cdist
+from scipy.spatial.distance import cdist
 
 NUM_MFCC = 13
 NUM_MELS = 40
@@ -18,6 +18,108 @@ WINDOW_LENGTH = int(0.10 * SAMPLE_RATE)
 HOP_LENGTH = int(0.04 * SAMPLE_RATE)
 EMPHASIS_FACTOR = 0.97
 DTW_MARGIN = 60
+
+def get_sorted(unsorted):
+    sorted = []
+    idx_arr = []
+    sorted.append(unsorted[0])
+    idx_arr.append(0)
+    for i in range(1, len(unsorted)):
+        inserted = 0
+        for j in range(0, len(sorted)):
+            if (unsorted[i] < sorted[j]):
+                sorted.insert(j, unsorted[i])
+                idx_arr.insert(j, i)
+                inserted = 1
+                break
+        if (inserted == 0):
+            sorted.append(unsorted[i])
+            idx_arr.append(i)
+    return sorted, idx_arr
+
+def get_sorted_segments(unsorted, key):
+    sorted = []
+    sorted.append(unsorted[0])
+    for i in range(1, len(unsorted)):
+        start, end = 0, len(sorted)-1
+        while (start < end):
+            mid = int((end - start) / 2) + start
+            if (unsorted[i][key] < sorted[mid][key]):
+                end = mid - 1
+            else:
+                start = mid + 1
+        assert start >= 0
+        assert end <= len(sorted)
+        if (unsorted[i][key] > sorted[end][key]):
+            if (end == len(sorted)):
+                sorted.append(unsorted[i])
+            else:        
+                sorted.insert(end+1, unsorted[i])
+        else:
+            sorted.insert(end, unsorted[i])
+    return sorted
+
+def get_energy_level_idx(energy_val, 
+                    energy_median,
+                    energy_max,
+                    num_energy_levels_bef_median,
+                    num_energy_levels_after_median):
+
+    energy_level_start = 0
+    
+    for i in range(0, num_energy_levels_bef_median + num_energy_levels_after_median):
+        if (i < num_energy_levels_bef_median):
+            energy_level_end = energy_level_start + (energy_median/num_energy_levels_bef_median)
+        else:
+            energy_level_end = energy_level_start + ((energy_max - energy_median)/num_energy_levels_after_median)
+
+        if (energy_level_start <= energy_val <= energy_level_end):
+            return i
+
+        energy_level_start = energy_level_end
+
+    print("should not be here: start %.2f end %.2f val %.2f" %(energy_level_start, energy_level_end, energy_val))
+    return i
+
+def get_deviation_bkts_with_energy_levels(segments_sorted_array,
+                        deviation_median, deviation_max,
+                        energy_median, energy_max,
+                        num_bkts_bef_median, 
+                        num_bkts_after_median, 
+                        num_energy_levels_bef_median,
+                        num_energy_levels_after_median):
+
+    bkt_arr = []
+    start = segments_sorted_array[0]["deviation"]
+    for i in range(0, num_bkts_bef_median + num_bkts_after_median):
+        bkt = []
+        energy_count_arr = numpy.zeros(num_energy_levels_bef_median + num_energy_levels_after_median + 1)
+        if (i < num_bkts_bef_median):
+            bkt_val = deviation_median/num_bkts_bef_median
+        else:
+            bkt_val = (deviation_max - deviation_median)/num_bkts_after_median
+        
+        end = start + bkt_val        
+        bkt_arr.append({"bkt":bkt, "energy_count_arr":energy_count_arr,"start":start, "end":end})
+        start = end
+
+    curr_bkt = 0
+    for i in range(0, len(segments_sorted_array)):
+        assert segments_sorted_array[i]["deviation"] >= bkt_arr[curr_bkt]["start"]
+        if (segments_sorted_array[i]["deviation"] > bkt_arr[curr_bkt]["end"]):
+            curr_bkt += 1
+        bkt_arr[curr_bkt]["bkt"].append(segments_sorted_array[i])
+        bkt_arr[curr_bkt]["energy_count_arr"][0] += 1
+
+        energy = segments_sorted_array[i]["energy"]
+        energy_level_idx = get_energy_level_idx(energy, 
+                                        energy_median, energy_max,
+                                        num_energy_levels_bef_median,
+                                        num_energy_levels_after_median)
+        #inc the idx by 1. 0th elem is the total count
+        bkt_arr[curr_bkt]["energy_count_arr"][energy_level_idx+1] += 1
+    
+    return bkt_arr
 
 class AlignmentAlgorithm(Enum):
     DTW_STRIPE = "DTW_STRIPE"
@@ -60,12 +162,30 @@ class aeneas_dtw():
 
     def __init__(
         self,
-        params, q_audio, r_audio
+        ap, q_audio, r_audio
     ):
-        self.params = params
+        self.ap = ap
+        self.params = ap.params
         self.query_audio = q_audio 
         self.ref_audio = r_audio
         self._setup_dtw()
+        
+    def compute_cost_matrix(self):
+        """
+        Compute the accumulated cost matrix, and return it.
+
+        Return ``None`` if the accumulated cost matrix cannot be computed
+        because one of the two waves is empty after masking (if requested).
+
+        :rtype: :class:`numpy.ndarray` (2D)
+        :raises: RuntimeError: if both the C extension and
+                               the pure Python code did not succeed.
+
+        .. versionadded:: 1.2.0
+        """
+        if self.dtw is None:
+            assert 0
+        return self.dtw.compute_cost_matrix()
 
     def compute_accumulated_cost_matrix(self):
         """
@@ -104,8 +224,7 @@ class aeneas_dtw():
         :raises: RuntimeError: if both the C extension and
                                the pure Python code did not succeed.
         """
-        wave_path = self.dtw.compute_path()
-        return wave_path    
+        return self.dtw.compute_path()
 
     def _setup_dtw(self):
         """
@@ -118,12 +237,12 @@ class aeneas_dtw():
         
         # set the selected algorithm
         if self.params.dtw_algorithm == AlignmentAlgorithm.DTW_EXACT:
-            self.dtw = DTWExact(
+            self.dtw = DTWExact(self.ap,
                 self.query_audio.mfcc,
                 self.ref_audio.mfcc                
             )
         else:
-            self.dtw = DTWStripe(
+            self.dtw = DTWStripe(self.ap,
                 self.query_audio.mfcc,
                 self.ref_audio.mfcc,
                 delta
@@ -131,17 +250,26 @@ class aeneas_dtw():
 
 class DTWStripe():
 
-    def __init__(self, m1, m2, delta):
+    def __init__(self, ap, m1, m2, delta):
         self.m1 = m1
         self.m2 = m2
         self.delta = delta
+        self.ap = ap
+
+    def compute_cost_matrix(self):
+        return self._compute_cost_matrix()
+
+    def compute_accumulated_cost_matrix(self):
+        cost_matrix = self._compute_cost_matrix()
+        accumulated_cost_matrix = self._compute_accumulated_cost_matrix(cost_matrix)
+        return accumulated_cost_matrix
 
     def compute_path(self):
         try:
             cost_matrix, centers = self._compute_cost_matrix()
             accumulated_cost_matrix = self._compute_accumulated_cost_matrix(cost_matrix, centers)
             best_path = self._compute_best_path(accumulated_cost_matrix, centers)
-            return best_path
+            return accumulated_cost_matrix, best_path
         except Exception as exc:
             print("An unexpected error occurred while running pure Python code", exc, False, None)
         return (False, None)
@@ -251,19 +379,44 @@ class DTWStripe():
 
 class DTWExact():
 
-    def __init__(self, m1, m2):
+    def __init__(self, ap, m1, m2):
         self.m1 = m1
         self.m2 = m2
+        self.ap = ap
+
+    def compute_cost_matrix(self):
+        return self._compute_cost_matrix()
 
     def compute_accumulated_cost_matrix(self):
-        cost_matrix = self._compute_cost_matrix()
-        accumulated_cost_matrix = self._compute_accumulated_cost_matrix(cost_matrix)
+        ap = self.ap
+        if hasattr(ap, 'cost_matrix'):
+            cost_matrix = ap.cost_matrix
+        else:
+            cost_matrix = self._compute_cost_matrix()
+
+        if hasattr(ap, 'acc_cost_matrix'):
+            accumulated_cost_matrix = ap.acc_cost_matrix
+        else:
+            accumulated_cost_matrix = self._compute_accumulated_cost_matrix(cost_matrix)
         return accumulated_cost_matrix
 
     def compute_path(self):
         accumulated_cost_matrix = self.compute_accumulated_cost_matrix()
         best_path = self._compute_best_path(accumulated_cost_matrix)
-        return best_path
+        return accumulated_cost_matrix, best_path
+
+    def _compute_cost_matrix_euc(self):
+        # discard first MFCC component
+        mfcc1 = self.m1[1:, :].T
+        mfcc2 = self.m2[1:, :].T
+        
+        return cdist(mfcc1, mfcc2)
+        
+        cost_matrix = numpy.zeros((mfcc1.shape[0], mfcc2.shape[0]))
+        for i in range(0, mfcc1.shape[0]):
+            for j in range(0, mfcc2.shape[0]):
+                cost_matrix[i][j] = numpy.linalg.norm(mfcc1[i] - mfcc2[j])
+        return cost_matrix
 
     def _compute_cost_matrix(self):
         # discard first MFCC component
@@ -568,7 +721,7 @@ class AlignmentPair:
         
         assert len(q_audio.labels) == len(r_audio.labels)
                     
-    def get_segment_deviation(self, alignment_obj, query_audio, 
+    def get_segment_deviation(self, query_audio, 
                                  aligned_indices, 
                                  aligned_indices_mfcc):
     
@@ -577,10 +730,14 @@ class AlignmentPair:
         
         assert len(query_labels) == len(aligned_indices)
         
-        assert alignment_obj.num_segments == len(query_labels)
+        seg_end_deviation = numpy.zeros(len(query_labels))
+        seg_energy_deviation = numpy.zeros(len(query_labels))
         
-        total_energy = numpy.sum(query_audio.audio**2)
-        
+        if hasattr(query_audio, 'audio'):
+            total_energy = numpy.sum(query_audio.audio**2)
+        else:
+            total_energy = 0
+                        
         for i in range(0, len(query_labels)):
             exp_end = query_labels[i]["end"]
             act_end = aligned_indices[i]["end"]
@@ -589,13 +746,18 @@ class AlignmentPair:
     
             start_sample = int(min(exp_end, act_end) * params.sr)
             end_sample = int(max(exp_end, act_end) * params.sr)
+            
+            if end_diff and hasattr(query_audio, 'audio'):
+                y = query_audio.audio[start_sample:end_sample]   
+                energy = numpy.sum(y**2) / total_energy / end_diff
+            else:
+                energy = 0
+            
+            seg_end_deviation[i] = end_diff
+            seg_energy_deviation[i] = energy
+            
+        return seg_end_deviation, seg_energy_deviation
         
-            y = query_audio.audio[start_sample:end_sample]   
-            energy = numpy.sum(y**2) / total_energy
-            
-            alignment_obj.seg_end_deviation[i] += end_diff
-            alignment_obj.seg_energy_deviation[i] += energy
-            
     def _calc_alignment_deviation(self, query_audio, 
                                  aligned_indices, 
                                  aligned_indices_mfcc):
@@ -608,8 +770,11 @@ class AlignmentPair:
         
         assert len(query_labels) == len(aligned_indices)
         
-        total_energy = numpy.sum(query_audio.audio**2)
-        
+        if hasattr(query_audio, 'audio'):
+            total_energy = numpy.sum(query_audio.audio**2)
+        else:
+            total_energy = 0
+            
         for i in range(0, len(query_labels)):
             exp_end = query_labels[i]["end"]
             act_end = aligned_indices[i]["end"]
@@ -619,9 +784,13 @@ class AlignmentPair:
     
             start_sample = int(min(exp_end, act_end) * params.sr)
             end_sample = int(max(exp_end, act_end) * params.sr)
-        
-            y = query_audio.audio[start_sample:end_sample]   
-            energy = numpy.sum(y**2) / total_energy
+
+            if hasattr(query_audio, 'audio'):
+                y = query_audio.audio[start_sample:end_sample]   
+                energy = numpy.sum(y**2) / total_energy
+            else:
+                energy = 0
+
             total_energy_diff += energy
             
             if (len(end_diff_arr)):
@@ -728,6 +897,12 @@ class AlignmentPair:
             for _ in range(num_elements):
               x, y = struct.unpack("<ii", f.read(8))
               self.wp.append((x, y))    
+              
+    def set_cost_matrix(self, cost_matrix):
+        self.cost_matrix = cost_matrix
+
+    def set_acc_cost_matrix(self, acc_cost_matrix):
+        self.acc_cost_matrix = acc_cost_matrix
 
 class AlignmentPairLibrosa(AlignmentPair):
 
@@ -742,26 +917,36 @@ class AlignmentPairLibrosa(AlignmentPair):
             g_c_val = False
         
         assert len(q_audio.labels) == len(r_audio.labels)
-                
+                        
         #distance = cdist(q_audio.mfcc.T, r_audio.mfcc.T)
         #D, self.wp = librosa.sequence.dtw(C = distance, subseq=False)
-        _, self.wp = librosa.sequence.dtw(q_audio.mfcc, 
+        self.acc_cost_matrix, self.wp = librosa.sequence.dtw(q_audio.mfcc, 
                                           r_audio.mfcc,
                                           global_constraints=g_c_val,
                                           backtrack=True)
+    def get_cost_matrix(self):
+        q_audio = self.query_audio
+        r_audio = self.ref_audio
+        return cdist(q_audio.mfcc.T, r_audio.mfcc.T)
 
 class AlignmentPairAeneas(AlignmentPair):
 
     def get_warping_path(self):
 
-        params = self.params
         q_audio = self.query_audio
         r_audio = self.ref_audio
         
         assert len(q_audio.labels) == len(r_audio.labels)
                 
-        a_dtw = aeneas_dtw(params, q_audio, r_audio)
-        self.wp = a_dtw.compute_path()
+        a_dtw = aeneas_dtw(self, q_audio, r_audio)
+        self.acc_cost_matrix, self.wp = \
+            a_dtw.compute_path()
+
+    def get_cost_matrix(self):
+        q_audio = self.query_audio
+        r_audio = self.ref_audio
+        a_dtw = aeneas_dtw(self, q_audio, r_audio)
+        return a_dtw.compute_cost_matrix()
 
 class AudioText:
     
@@ -770,7 +955,9 @@ class AudioText:
         self.filename = filename
         self.labelname = labelname
         self.labels  = self._construct_labels(labelname)
-        self.audio, sample_rate = librosa.load(self.filename, sr=params.sr)
+        
+    def load_audio(self):
+        self.audio, sample_rate = librosa.load(self.filename, sr=self.params.sr)
 
     def _construct_labels(self, labelname):
         
@@ -848,15 +1035,50 @@ class Alignment:
         self.low_freq = low_freq
         self.high_freq = high_freq
         self.dtw_algorithm = algorithm
+        self.ap_arr = []
         
+    def get_segment_deviations(self, swap=0):
+        
+        seg_end_deviation_arr = []
+        seg_energy_deviation_arr = []
+
+        for i in range(0, len(self.ap_arr)):
+            ap = self.ap_arr[i]
+                    
+            if (swap == 0):
+                wp = ap.wp[::-1]
+                query_audio = ap.query_audio
+                ref_labels = ap.ref_audio.labels
+            else:
+                wp = [(point[1], point[0]) for point in ap.wp]
+                wp = wp[::-1]
+                query_audio = ap.ref_audio
+                ref_labels = ap.query_audio.labels
+
+            aligned_indices, aligned_indices_mfcc = \
+                ap._get_alignment_indices(wp, ref_labels)
+
+            a, b = ap.get_segment_deviation(query_audio,
+                                     aligned_indices, 
+                                     aligned_indices_mfcc)
+            seg_end_deviation_arr.append(a)
+            seg_energy_deviation_arr.append(b)
+        
+        return seg_end_deviation_arr, seg_energy_deviation_arr
+
+    def get_segment_deviations_swap(self):
+        return self.get_segment_deviations(swap=1)
+
 class AlignmentLibrosa(Alignment):
 
     def audio_text(self, filename, labelname):
         return AudioTextLibrosa(self, filename, labelname)
     
     def alignment_pair(self, q_audio, r_audio):
-        return AlignmentPairLibrosa(self, q_audio, r_audio)
-    
+        ap = AlignmentPairLibrosa(self, q_audio, r_audio)
+        self.ap_arr.append(ap)
+        return ap
+        
 class AlignmentAeneas(Alignment):
     def __init__(self, 
                 sr=SAMPLE_RATE, 
@@ -884,7 +1106,6 @@ class AlignmentAeneas(Alignment):
         self.fft_order = fft_order
         self.emphasis_factor = emphasis_factor
         self.dtw_margin = dtw_margin
-        self.ap_arr = []
         
     def audio_text(self, filename, labelname):
         return AudioTextAeneas(self, filename, labelname)
@@ -894,18 +1115,3 @@ class AlignmentAeneas(Alignment):
         self.ap_arr.append(ap)
         return ap
     
-    def get_segment_deviations(self):
-        for i in range(0, len(self.ap_arr)):
-            ap = self.ap_arr[i]
-            if (i == 0):
-                self.num_segments = len(ap.ref_audio.labels)
-                self.seg_end_deviation = numpy.zeros(self.num_segments)
-                self.seg_energy_deviation = numpy.zeros(self.num_segments)
-            else:
-                assert self.num_segments == len(ap.ref_audio.labels)
-                
-            wp = ap.wp[::-1]
-            aligned_indices, aligned_indices_mfcc = \
-                ap._get_alignment_indices(wp, ap.ref_audio.labels)
-            ap.get_segment_deviation(self, ap.query_audio ,aligned_indices, aligned_indices_mfcc)
-            return self.seg_end_deviation, self.seg_energy_deviation
