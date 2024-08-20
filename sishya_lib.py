@@ -19,6 +19,10 @@ HOP_LENGTH = int(0.04 * SAMPLE_RATE)
 EMPHASIS_FACTOR = 0.97
 DTW_MARGIN = 60
 
+def normalize_matrix(matrix):
+    max_val = numpy.max(matrix)
+    return matrix / max_val
+
 def get_sorted(unsorted):
     sorted = []
     idx_arr = []
@@ -169,7 +173,7 @@ class aeneas_dtw():
         self.query_audio = q_audio 
         self.ref_audio = r_audio
         self._setup_dtw()
-        
+                
     def compute_cost_matrix(self):
         """
         Compute the accumulated cost matrix, and return it.
@@ -257,6 +261,8 @@ class DTWStripe():
         self.ap = ap
 
     def compute_cost_matrix(self):
+        if (self.ap.weight != -1):
+            return self._compute_cost_matrix_wegihted()
         return self._compute_cost_matrix()
 
     def compute_accumulated_cost_matrix(self):
@@ -266,13 +272,66 @@ class DTWStripe():
 
     def compute_path(self):
         try:
-            cost_matrix, centers = self._compute_cost_matrix()
+            cost_matrix, centers = self.compute_cost_matrix()
             accumulated_cost_matrix = self._compute_accumulated_cost_matrix(cost_matrix, centers)
             best_path = self._compute_best_path(accumulated_cost_matrix, centers)
-            return accumulated_cost_matrix, best_path
+            return best_path
         except Exception as exc:
             print("An unexpected error occurred while running pure Python code", exc, False, None)
         return (False, None)
+
+    def _compute_cost_matrix_wegihted(self):
+        # discard first MFCC component
+        mfcc1 = self.m1[1:, :]
+        mfcc2 = self.m2[1:, :]
+        norm2_1 = numpy.sqrt(numpy.sum(mfcc1 ** 2, 0))
+        norm2_2 = numpy.sqrt(numpy.sum(mfcc2 ** 2, 0))
+    
+        print(self.ap.weight)        
+        
+        n = mfcc1.shape[1]
+        m = mfcc2.shape[1]
+        delta = self.delta
+        if delta > m:
+            delta = m
+    
+        cost_matrix = numpy.zeros((n, delta))
+        cosine_matrix = numpy.zeros((n, delta))
+        euc_matrix = numpy.zeros((n, delta))
+        centers = numpy.zeros(n, dtype=int)
+    
+        for i in range(n):
+            # center j at row i
+            center_j = (m * i) // n
+            # COMMENTED self.log([u"Center at row %d is %d", i, center_j])
+            range_start = max(0, center_j - (delta // 2))
+            range_end = range_start + delta
+            if range_end > m:
+                range_end = m
+                range_start = range_end - delta
+            centers[i] = range_start
+            # COMMENTED self.log([u"Range at row %d is %d %d", i, range_start, range_end])
+            for j in range(range_start, range_end):
+                diff = mfcc1[:, i] - mfcc2[:, j]
+                euclidean_dist = numpy.sqrt(numpy.sum(diff ** 2))
+
+                tmp = mfcc1[:, i].transpose().dot(mfcc2[:, j])
+                tmp /= norm2_1[i] * norm2_2[j]
+                cosine_dist = 1 - tmp
+        
+                cosine_matrix[i][j - range_start] = cosine_dist
+                euc_matrix[i][j - range_start] = euclidean_dist
+
+        euc_matrix = normalize_matrix(euc_matrix)
+        cosine_matrix = normalize_matrix(cosine_matrix)                
+        
+        for i in range(len(euc_matrix)):
+            for j in range(len(euc_matrix[i])):
+                cost_matrix[i][j] = \
+                    cosine_matrix[i][j] \
+                    + (self.ap.weight * euc_matrix[i][j])
+                
+        return (cost_matrix, centers)
 
     def _compute_cost_matrix(self):
         # discard first MFCC component
@@ -394,16 +453,12 @@ class DTWExact():
         else:
             cost_matrix = self._compute_cost_matrix()
 
-        if hasattr(ap, 'acc_cost_matrix'):
-            accumulated_cost_matrix = ap.acc_cost_matrix
-        else:
-            accumulated_cost_matrix = self._compute_accumulated_cost_matrix(cost_matrix)
-        return accumulated_cost_matrix
+        return self._compute_accumulated_cost_matrix(cost_matrix)
 
     def compute_path(self):
         accumulated_cost_matrix = self.compute_accumulated_cost_matrix()
         best_path = self._compute_best_path(accumulated_cost_matrix)
-        return accumulated_cost_matrix, best_path
+        return best_path
 
     def _compute_cost_matrix_euc(self):
         # discard first MFCC component
@@ -713,11 +768,15 @@ def secs_to_mfccs(params, val):
     
 class AlignmentPair:
 
-    def __init__(self, params, q_audio, r_audio):
+    def __init__(self, params, q_audio, r_audio, metric, weight):
 
         self.params = params
         self.query_audio = q_audio
         self.ref_audio = r_audio
+        self.weight = weight
+        
+        assert metric == "euclidean" or metric == "cosine"
+        self.metric = metric
         
         assert len(q_audio.labels) == len(r_audio.labels)
                     
@@ -816,11 +875,13 @@ class AlignmentPair:
                     energy_diff_arr.append(energy)
             else:
                 energy_diff_arr.append(energy)
-
+        
+        #multiply the energy levels by 1000 to get a number 
+        #large enough to show difference between various warping paths
         return total_end_diff/len(query_labels), \
-            total_energy_diff/len(query_labels), \
+            total_energy_diff * 1000/len(query_labels), \
             end_diff_arr[int(len(query_labels)/2)], \
-            energy_diff_arr[int(len(query_labels)/2)]
+            energy_diff_arr[int(len(query_labels)/2)] * 1000
     
     def _find_alignment_range(self, start, end, wp, search_start):
 
@@ -919,11 +980,20 @@ class AlignmentPairLibrosa(AlignmentPair):
         assert len(q_audio.labels) == len(r_audio.labels)
                         
         #distance = cdist(q_audio.mfcc.T, r_audio.mfcc.T)
-        #D, self.wp = librosa.sequence.dtw(C = distance, subseq=False)
-        self.acc_cost_matrix, self.wp = librosa.sequence.dtw(q_audio.mfcc, 
+        
+        if hasattr(self, 'cost_matrix'):
+    
+            self.wp = librosa.sequence.dtw(
+                                                    C = self.cost_matrix,
+                                                    subseq=False,
+                                                    metric=self.metric)
+        else:
+            self.wp = librosa.sequence.dtw(q_audio.mfcc, 
                                           r_audio.mfcc,
                                           global_constraints=g_c_val,
-                                          backtrack=True)
+                                          backtrack=True,
+                                          metric=self.metric)
+    
     def get_cost_matrix(self):
         q_audio = self.query_audio
         r_audio = self.ref_audio
@@ -939,8 +1009,7 @@ class AlignmentPairAeneas(AlignmentPair):
         assert len(q_audio.labels) == len(r_audio.labels)
                 
         a_dtw = aeneas_dtw(self, q_audio, r_audio)
-        self.acc_cost_matrix, self.wp = \
-            a_dtw.compute_path()
+        self.wp = a_dtw.compute_path()
 
     def get_cost_matrix(self):
         q_audio = self.query_audio
@@ -1074,8 +1143,8 @@ class AlignmentLibrosa(Alignment):
     def audio_text(self, filename, labelname):
         return AudioTextLibrosa(self, filename, labelname)
     
-    def alignment_pair(self, q_audio, r_audio):
-        ap = AlignmentPairLibrosa(self, q_audio, r_audio)
+    def alignment_pair(self, q_audio, r_audio, metric):
+        ap = AlignmentPairLibrosa(self, q_audio, r_audio, metric)
         self.ap_arr.append(ap)
         return ap
         
@@ -1110,8 +1179,8 @@ class AlignmentAeneas(Alignment):
     def audio_text(self, filename, labelname):
         return AudioTextAeneas(self, filename, labelname)
     
-    def alignment_pair(self, q_audio, r_audio):
-        ap = AlignmentPairAeneas(self, q_audio, r_audio)
+    def alignment_pair(self, q_audio, r_audio, metric, weight):
+        ap = AlignmentPairAeneas(self, q_audio, r_audio, metric, weight)
         self.ap_arr.append(ap)
         return ap
     
